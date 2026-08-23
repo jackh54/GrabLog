@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, cloud/**]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit & worker tests
+        run: npm test
+
+      - name: Shell discovery smoke test
+        run: bash tests/discovery_smoke.sh
+
+      - name: ShellCheck client script
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: src/scripts
+          severity: warning

@@ -1,0 +1,28 @@
+name = "grablog"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Set this to your production hostname after DNS is wired up.
+# routes = [{ pattern = "grablog.pandascript.dev", custom_domain = true }]
+
+[vars]
+PUBLIC_BASE_URL = "https://grablog.pandascript.dev"
+MAX_UPLOAD_BYTES = "10485760"
+TTL_SECONDS = "86400"
+
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "grablog-logs"
+preview_bucket_name = "grablog-logs-preview"
+
+[triggers]
+crons = ["0 * * * *"]
+
+[observability]
+enabled = true
+
+[[rules]]
+type = "Text"
+globs = ["**/*.sh", "**/*.ps1"]
+fallthrough = true
