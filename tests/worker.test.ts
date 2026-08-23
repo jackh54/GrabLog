@@ -158,6 +158,43 @@ describe("worker HTTP", () => {
     expect(res.status).toBe(404);
   });
 
+  it("accepts gzip uploads via X-GrabLog-Encoding", async () => {
+    const plain = "gzipped minecraft log line\n";
+    // Minimal gzip via CompressionStream
+    const stream = new Blob([plain])
+      .stream()
+      .pipeThrough(new CompressionStream("gzip"));
+    const gz = await new Response(stream).arrayBuffer();
+
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://grablog.test/api/upload", {
+        method: "POST",
+        headers: {
+          "content-type": "application/gzip",
+          "x-grablog-encoding": "gzip",
+          "x-grablog-filename": "latest.log.gz",
+        },
+        body: gz,
+      }),
+      env as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; bytes: number };
+    expect(body.bytes).toBe(plain.length);
+
+    const getCtx = createExecutionContext();
+    const getRes = await worker.fetch(
+      new Request(body.url),
+      env as Env,
+      getCtx,
+    );
+    await waitOnExecutionContext(getCtx);
+    expect(await getRes.text()).toBe(plain);
+  });
+
   it("accepts multipart uploads", async () => {
     const form = new FormData();
     form.set(

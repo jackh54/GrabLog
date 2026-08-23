@@ -392,7 +392,7 @@ if [ "$BYTES" -gt 104857600 ]; then
   exit 1
 fi
 
-# Compress plain logs — Minecraft logs shrink a lot and avoid "stuck" uploads.
+# Compress plain logs — Minecraft logs shrink a lot and avoid slow uploads.
 case "$BEST" in
   *.gz)
     CONTENT_TYPE="application/gzip"
@@ -400,7 +400,9 @@ case "$BEST" in
     ;;
   *)
     if command -v gzip >/dev/null 2>&1; then
-      GZ_TMP="$(mktemp "$_tmp/grablog.XXXXXX.gz")"
+      GZ_BASE="$(mktemp "$_tmp/grablog.XXXXXX")"
+      GZ_TMP="${GZ_BASE}.gz"
+      rm -f "$GZ_BASE"
       log_step "Compressing…"
       if gzip -c -n "$BEST" >"$GZ_TMP"; then
         UPLOAD_FILE="$GZ_TMP"
@@ -426,71 +428,126 @@ fi
 
 UPLOAD_URL="${GRABLOG_API}/api/upload"
 log_step "Checking API…"
-if command -v curl >/dev/null 2>&1; then
-  if ! curl -fsS --connect-timeout 8 --max-time 15 \
-    -o /dev/null "${GRABLOG_API}/health"
-  then
-    [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
-    log_err "Cannot reach GrabLog API."
-    log_dim "  ${GRABLOG_API}/health"
-    exit 1
+log_dim "  $UPLOAD_URL"
+
+do_health() {
+  if command -v curl >/dev/null 2>&1; then
+    command curl -fsS --http1.1 --connect-timeout 5 --max-time 10 \
+      -o /dev/null "${GRABLOG_API}/health"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O /dev/null --timeout=10 "${GRABLOG_API}/health"
+  else
+    return 1
   fi
+}
+
+if ! do_health; then
+  [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
+  log_err "Cannot reach GrabLog API."
+  log_dim "  ${GRABLOG_API}/health"
+  exit 1
 fi
+log_ok "API reachable"
 
 log_step "Uploading $(human_size "$UP_BYTES")…"
+: >"$UPLOAD_RESP"
+CURL_ERR=1
 
-CURL_ERR=0
-CURL_HAPPY=""
-if curl --help all 2>/dev/null | grep -q -- '--happy-eyeballs-timeout-ms'; then
-  CURL_HAPPY="--happy-eyeballs-timeout-ms 500"
-fi
+# Minimal curl flags — avoid retries/progress/help-detection (those hang on some systems).
+do_curl_upload() {
+  if [ -n "$CONTENT_ENCODING" ]; then
+    command curl -sS -f --http1.1 \
+      --connect-timeout 8 \
+      --max-time 45 \
+      -X POST \
+      -H "Content-Type: $CONTENT_TYPE" \
+      -H "X-GrabLog-Encoding: $CONTENT_ENCODING" \
+      -H "X-GrabLog-Filename: $FNAME" \
+      -H "Expect:" \
+      --data-binary @"$UPLOAD_FILE" \
+      -o "$UPLOAD_RESP" \
+      -w "http=%{http_code} time=%{time_total}\n" \
+      "$UPLOAD_URL" >&2
+  else
+    command curl -sS -f --http1.1 \
+      --connect-timeout 8 \
+      --max-time 45 \
+      -X POST \
+      -H "Content-Type: $CONTENT_TYPE" \
+      -H "X-GrabLog-Filename: $FNAME" \
+      -H "Expect:" \
+      --data-binary @"$UPLOAD_FILE" \
+      -o "$UPLOAD_RESP" \
+      -w "http=%{http_code} time=%{time_total}\n" \
+      "$UPLOAD_URL" >&2
+  fi
+}
+
+do_python_upload() {
+  command python3 - "$UPLOAD_URL" "$UPLOAD_FILE" "$CONTENT_TYPE" "$CONTENT_ENCODING" "$FNAME" "$UPLOAD_RESP" <<'PY'
+import sys, urllib.request, urllib.error
+url, path, ctype, enc, fname, out = sys.argv[1:7]
+data = open(path, "rb").read()
+req = urllib.request.Request(url, data=data, method="POST")
+req.add_header("Content-Type", ctype)
+req.add_header("X-GrabLog-Filename", fname)
+if enc:
+    req.add_header("X-GrabLog-Encoding", enc)
+try:
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        body = resp.read()
+        status = resp.status
+    open(out, "wb").write(body)
+    print(f"http={status} via=python", file=sys.stderr)
+except urllib.error.HTTPError as e:
+    open(out, "wb").write(e.read() or b"")
+    print(f"http={e.code} via=python", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
 
 if command -v curl >/dev/null 2>&1; then
-  # Progress on stderr (not -s), timeouts, no Expect:100-continue, optional HE timeout.
-  # shellcheck disable=SC2086
-  set -- curl --progress-bar -f \
-    --connect-timeout 10 \
-    --max-time 180 \
-    --retry 2 \
-    --retry-delay 1 \
-    --retry-connrefused \
-    $CURL_HAPPY \
-    -X POST \
-    -H "Content-Type: $CONTENT_TYPE" \
-    -H "X-GrabLog-Filename: $FNAME" \
-    -H "Expect:" \
-    --data-binary @"$UPLOAD_FILE" \
-    -o "$UPLOAD_RESP" \
-    "$UPLOAD_URL"
-  if [ -n "$CONTENT_ENCODING" ]; then
-    set -- "$@" -H "Content-Encoding: $CONTENT_ENCODING"
+  if do_curl_upload; then
+    CURL_ERR=0
+  else
+    CURL_ERR=$?
+    log_warn "curl upload failed (exit $CURL_ERR) — trying python fallback…"
   fi
-  if ! "$@"; then
+fi
+
+if [ "$CURL_ERR" -ne 0 ] && command -v python3 >/dev/null 2>&1; then
+  if do_python_upload; then
+    CURL_ERR=0
+  else
     CURL_ERR=$?
   fi
-elif command -v wget >/dev/null 2>&1; then
-  set -- wget -O "$UPLOAD_RESP" --timeout=180 --tries=2 \
-    --method=POST \
-    --header="Content-Type: $CONTENT_TYPE" \
-    --header="X-GrabLog-Filename: $FNAME" \
-    --body-file="$UPLOAD_FILE" \
-    "$UPLOAD_URL"
+elif [ "$CURL_ERR" -ne 0 ] && command -v wget >/dev/null 2>&1; then
   if [ -n "$CONTENT_ENCODING" ]; then
-    set -- wget -O "$UPLOAD_RESP" --timeout=180 --tries=2 \
+    if wget -q -O "$UPLOAD_RESP" --timeout=45 --tries=1 \
       --method=POST \
       --header="Content-Type: $CONTENT_TYPE" \
-      --header="Content-Encoding: $CONTENT_ENCODING" \
+      --header="X-GrabLog-Encoding: $CONTENT_ENCODING" \
       --header="X-GrabLog-Filename: $FNAME" \
       --body-file="$UPLOAD_FILE" \
       "$UPLOAD_URL"
+    then
+      CURL_ERR=0
+    else
+      CURL_ERR=$?
+    fi
+  else
+    if wget -q -O "$UPLOAD_RESP" --timeout=45 --tries=1 \
+      --method=POST \
+      --header="Content-Type: $CONTENT_TYPE" \
+      --header="X-GrabLog-Filename: $FNAME" \
+      --body-file="$UPLOAD_FILE" \
+      "$UPLOAD_URL"
+    then
+      CURL_ERR=0
+    else
+      CURL_ERR=$?
+    fi
   fi
-  if ! "$@"; then
-    CURL_ERR=$?
-  fi
-else
-  [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
-  log_err "Need curl or wget to upload."
-  exit 1
 fi
 
 [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
@@ -500,6 +557,7 @@ if [ "$CURL_ERR" -ne 0 ]; then
   log_err "Upload failed (exit $CURL_ERR)."
   [ -n "$RESP" ] && log_dim "  $RESP"
   log_dim "  endpoint: $UPLOAD_URL"
+  log_dim "  tip: re-run with ?yes=1 and check that GRABLOG_API matches your preview host"
   exit 1
 fi
 

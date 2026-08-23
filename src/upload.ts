@@ -66,7 +66,9 @@ export async function handleUpload(
   const maxBytes = parsePositiveInt(env.MAX_UPLOAD_BYTES, 10 * 1024 * 1024);
   const ttlSeconds = parsePositiveInt(env.TTL_SECONDS, 86_400);
   const contentType = request.headers.get("content-type") ?? "";
-  const encoding = request.headers.get("content-encoding");
+  const encoding =
+    request.headers.get("x-grablog-encoding") ??
+    request.headers.get("content-encoding");
 
   let body: ArrayBuffer;
   let filename = "latest.log";

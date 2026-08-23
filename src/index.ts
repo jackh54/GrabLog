@@ -42,7 +42,7 @@ function corsPreflight(): Response {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers":
-        "content-type, content-encoding, x-grablog-filename, accept",
+        "content-type, content-encoding, x-grablog-filename, x-grablog-encoding, accept",
       "access-control-max-age": "86400",
     },
   });

@@ -322,7 +322,7 @@ try {
 
   $handler = New-Object System.Net.Http.HttpClientHandler
   $client = New-Object System.Net.Http.HttpClient($handler)
-  $client.Timeout = [TimeSpan]::FromSeconds(180)
+  $client.Timeout = [TimeSpan]::FromSeconds(45)
 
   Write-Host '  › Checking API…' -ForegroundColor Cyan
   try {
@@ -341,7 +341,7 @@ try {
   $content = New-Object System.Net.Http.ByteArrayContent($bytes)
   $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
   if ($contentEncoding) {
-    $content.Headers.ContentEncoding.Add($contentEncoding)
+    $content.Headers.Add('X-GrabLog-Encoding', $contentEncoding)
   }
   $content.Headers.Add('X-GrabLog-Filename', $uploadName)
   $response = $client.PostAsync($uploadUri, $content).GetAwaiter().GetResult()
