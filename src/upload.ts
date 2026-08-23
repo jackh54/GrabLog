@@ -28,13 +28,45 @@ function toArrayBuffer(data: ArrayBuffer | ArrayBufferView | string): ArrayBuffe
   return data;
 }
 
+function looksGzip(bytes: ArrayBuffer): boolean {
+  if (bytes.byteLength < 2) return false;
+  const view = new Uint8Array(bytes);
+  return view[0] === 0x1f && view[1] === 0x8b;
+}
+
+async function maybeGunzip(
+  bytes: ArrayBuffer,
+  contentType: string,
+  encoding: string | null,
+): Promise<ArrayBuffer> {
+  const wants =
+    encoding?.toLowerCase().includes("gzip") ||
+    contentType.toLowerCase().includes("gzip") ||
+    looksGzip(bytes);
+  if (!wants) return bytes;
+
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return toArrayBuffer(await new Response(stream).arrayBuffer());
+  } catch {
+    // If the client said gzip but body isn't valid, keep raw bytes.
+    return bytes;
+  }
+}
+
 export async function handleUpload(
   request: Request,
   env: Env,
+  publicBaseUrl: string,
 ): Promise<UploadResult> {
+  if (!env.LOGS) {
+    return { ok: false, status: 500, error: "R2 bucket not configured" };
+  }
+
   const maxBytes = parsePositiveInt(env.MAX_UPLOAD_BYTES, 10 * 1024 * 1024);
   const ttlSeconds = parsePositiveInt(env.TTL_SECONDS, 86_400);
   const contentType = request.headers.get("content-type") ?? "";
+  const encoding = request.headers.get("content-encoding");
 
   let body: ArrayBuffer;
   let filename = "latest.log";
@@ -57,6 +89,12 @@ export async function handleUpload(
   } else {
     body = toArrayBuffer(await request.arrayBuffer());
     filename = sanitizeFilename(request.headers.get("x-grablog-filename"));
+  }
+
+  body = await maybeGunzip(body, contentType, encoding);
+  // Strip .gz after decompress so share links open as plain text.
+  if (filename.toLowerCase().endsWith(".gz")) {
+    filename = filename.slice(0, -3) || "latest.log";
   }
 
   if (body.byteLength === 0) {
@@ -97,7 +135,7 @@ export async function handleUpload(
     }),
   ]);
 
-  const base = env.PUBLIC_BASE_URL.replace(/\/$/, "");
+  const base = publicBaseUrl.replace(/\/$/, "");
   return {
     ok: true,
     id,

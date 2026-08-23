@@ -3,6 +3,7 @@ import {
   escapeForScriptLiteral,
   fillScriptTemplate,
   paramsFromUrl,
+  resolvePublicBase,
   sanitizeParam,
   wantsPowerShell,
 } from "../src/script";
@@ -48,6 +49,17 @@ describe("fillScriptTemplate", () => {
     expect(out).toContain('API="https://grablog.test"');
     expect(out).toContain('L="prism"');
     expect(out).toContain('S="example.net"');
+  });
+});
+
+describe("resolvePublicBase", () => {
+  it("uses the request origin so preview URLs upload to themselves", () => {
+    const req = new Request(
+      "https://grablog-preview.example.workers.dev/?server=x",
+    );
+    expect(resolvePublicBase(req, "https://grablog.pandascript.dev")).toBe(
+      "https://grablog-preview.example.workers.dev",
+    );
   });
 });
 

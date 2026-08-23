@@ -23,6 +23,25 @@ export function sanitizeParam(raw: string | null, max = 64): string {
   return trimmed;
 }
 
+/**
+ * Prefer the host the client actually hit (preview / workers.dev / custom domain)
+ * so uploads and share links stay on the same deployment.
+ */
+export function resolvePublicBase(
+  request: Request,
+  fallback: string,
+): string {
+  try {
+    const url = new URL(request.url);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url.origin;
+    }
+  } catch {
+    // fall through
+  }
+  return fallback.replace(/\/$/, "");
+}
+
 export interface ScriptParams {
   api: string;
   launcher: string;
@@ -49,12 +68,12 @@ export function fillScriptTemplate(
 
 export function paramsFromUrl(
   url: URL,
-  publicBaseUrl: string,
+  apiBase: string,
 ): ScriptParams {
   const yesRaw = (url.searchParams.get("yes") ?? url.searchParams.get("y") ?? "")
     .toLowerCase();
   return {
-    api: publicBaseUrl.replace(/\/$/, ""),
+    api: apiBase.replace(/\/$/, ""),
     launcher: sanitizeParam(
       url.searchParams.get("launcher") ?? url.searchParams.get("client"),
     ),

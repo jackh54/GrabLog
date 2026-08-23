@@ -33,7 +33,14 @@ SCRIPT="$TMP/grablog.sh"
 cat >"$TMP/curl" <<'EOF'
 #!/usr/bin/env bash
 FILE=""
-OUT=""
+OUT="/dev/stdout"
+URL=""
+# Health checks just succeed.
+for a in "$@"; do
+  case "$a" in
+    */health) echo '{"ok":true}'; exit 0 ;;
+  esac
+done
 while [ $# -gt 0 ]; do
   case "$1" in
     --data-binary)
@@ -50,13 +57,21 @@ while [ $# -gt 0 ]; do
   esac
   shift || true
 done
+# Non-upload GETs
+case "$URL" in
+  */api/upload) ;;
+  *)
+    if [ "$OUT" != "/dev/stdout" ]; then : >"$OUT"; else echo ok; fi
+    exit 0
+    ;;
+esac
 BYTES=$(wc -c <"$FILE" | tr -d ' ')
 ID="TestSmokeId123456789012"
 RESP=$(printf '{"id":"%s","url":"https://grablog.test/l/%s","expiresAt":1,"bytes":%s}\n' "$ID" "$ID" "$BYTES")
-if [ -n "$OUT" ]; then
-  printf '%s' "$RESP" >"$OUT"
-else
+if [ "$OUT" = "/dev/stdout" ]; then
   printf '%s' "$RESP"
+else
+  printf '%s' "$RESP" >"$OUT"
 fi
 EOF
 chmod +x "$TMP/curl"

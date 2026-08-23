@@ -274,19 +274,76 @@ if (-not $yes) {
   }
 }
 
-Write-Host '  › Uploading…' -ForegroundColor Cyan
-$bytes = [IO.File]::ReadAllBytes($best.FullName)
-$contentType = if ($best.Extension -eq '.gz') { 'application/gzip' } else { 'text/plain; charset=utf-8' }
-$uploadUri = ($GrabLogApi.TrimEnd('/') + '/api/upload')
+Write-Host '  › Preparing upload…' -ForegroundColor Cyan
+
+if ($best.Length -gt 104857600) {
+  Write-Host ("  ✗ Log is {0:N0} bytes — too large (limit 100 MB)." -f $best.Length) -ForegroundColor Red
+  exit 1
+}
+
+$uploadPath = $best.FullName
+$uploadName = $best.Name
+$contentType = 'text/plain; charset=utf-8'
+$contentEncoding = $null
+$tempGz = $null
 
 try {
-  # HttpClient gives reliable timeouts (Invoke-RestMethod can hang on bad Expect/proxy paths).
+  if ($best.Extension -eq '.gz') {
+    $contentType = 'application/gzip'
+    $contentEncoding = 'gzip'
+  } else {
+    $tempGz = [IO.Path]::GetTempFileName() + '.gz'
+    $inStream = [IO.File]::OpenRead($best.FullName)
+    $outStream = [IO.File]::Create($tempGz)
+    try {
+      $gzip = New-Object IO.Compression.GzipStream($outStream, [IO.Compression.CompressionMode]::Compress)
+      $inStream.CopyTo($gzip)
+      $gzip.Dispose()
+    } finally {
+      $outStream.Dispose()
+      $inStream.Dispose()
+    }
+    $uploadPath = $tempGz
+    $uploadName = $best.Name + '.gz'
+    $contentType = 'application/gzip'
+    $contentEncoding = 'gzip'
+    $gzLen = (Get-Item -LiteralPath $tempGz).Length
+    Write-Host ("    {0:N0} → {1:N0} bytes (gzip)" -f $best.Length, $gzLen) -ForegroundColor DarkGray
+  }
+
+  $payloadLen = (Get-Item -LiteralPath $uploadPath).Length
+  if ($payloadLen -gt 10485760) {
+    Write-Host ("  ✗ Upload payload is {0:N0} bytes — over the 10 MB limit." -f $payloadLen) -ForegroundColor Red
+    exit 1
+  }
+
+  $uploadUri = ($GrabLogApi.TrimEnd('/') + '/api/upload')
+  $healthUri = ($GrabLogApi.TrimEnd('/') + '/health')
+
   $handler = New-Object System.Net.Http.HttpClientHandler
   $client = New-Object System.Net.Http.HttpClient($handler)
-  $client.Timeout = [TimeSpan]::FromSeconds(120)
+  $client.Timeout = [TimeSpan]::FromSeconds(180)
+
+  Write-Host '  › Checking API…' -ForegroundColor Cyan
+  try {
+    $health = $client.GetAsync($healthUri).GetAwaiter().GetResult()
+    if (-not $health.IsSuccessStatusCode) {
+      throw "health check failed ($([int]$health.StatusCode))"
+    }
+  } catch {
+    Write-Host ("  ✗ Cannot reach GrabLog API: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host ("    {0}" -f $healthUri) -ForegroundColor DarkGray
+    exit 1
+  }
+
+  Write-Host ("  › Uploading {0:N0} bytes…" -f $payloadLen) -ForegroundColor Cyan
+  $bytes = [IO.File]::ReadAllBytes($uploadPath)
   $content = New-Object System.Net.Http.ByteArrayContent($bytes)
   $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
-  $content.Headers.Add('X-GrabLog-Filename', $best.Name)
+  if ($contentEncoding) {
+    $content.Headers.ContentEncoding.Add($contentEncoding)
+  }
+  $content.Headers.Add('X-GrabLog-Filename', $uploadName)
   $response = $client.PostAsync($uploadUri, $content).GetAwaiter().GetResult()
   $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
   if (-not $response.IsSuccessStatusCode) {
@@ -297,11 +354,14 @@ try {
   $resp = $raw | ConvertFrom-Json
 } catch {
   Write-Host ("  ✗ Upload failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
-  Write-Host ("    endpoint: {0}" -f $uploadUri) -ForegroundColor DarkGray
+  Write-Host ("    endpoint: {0}" -f ($GrabLogApi.TrimEnd('/') + '/api/upload')) -ForegroundColor DarkGray
   exit 1
 } finally {
   if ($content) { $content.Dispose() }
   if ($client) { $client.Dispose() }
+  if ($tempGz -and (Test-Path -LiteralPath $tempGz)) {
+    Remove-Item -LiteralPath $tempGz -Force -ErrorAction SilentlyContinue
+  }
 }
 
 if (-not $resp.url) {

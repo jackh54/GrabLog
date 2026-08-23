@@ -381,44 +381,119 @@ if [ "$GRABLOG_YES" != "1" ] && [ "$GRABLOG_YES" != "true" ]; then
 fi
 
 FNAME="$(basename "$BEST")"
+UPLOAD_FILE="$BEST"
 CONTENT_TYPE="text/plain; charset=utf-8"
+CONTENT_ENCODING=""
+CLEANUP_UPLOAD=""
+
+# Refuse absurd raw sizes before we spend time compressing/uploading.
+if [ "$BYTES" -gt 104857600 ]; then
+  log_err "Log is $(human_size "$BYTES") — too large (limit 100 MB)."
+  exit 1
+fi
+
+# Compress plain logs — Minecraft logs shrink a lot and avoid "stuck" uploads.
 case "$BEST" in
-  *.gz) CONTENT_TYPE="application/gzip" ;;
+  *.gz)
+    CONTENT_TYPE="application/gzip"
+    CONTENT_ENCODING="gzip"
+    ;;
+  *)
+    if command -v gzip >/dev/null 2>&1; then
+      GZ_TMP="$(mktemp "$_tmp/grablog.XXXXXX.gz")"
+      log_step "Compressing…"
+      if gzip -c -n "$BEST" >"$GZ_TMP"; then
+        UPLOAD_FILE="$GZ_TMP"
+        FNAME="${FNAME}.gz"
+        CONTENT_TYPE="application/gzip"
+        CONTENT_ENCODING="gzip"
+        CLEANUP_UPLOAD="$GZ_TMP"
+        GZ_BYTES="$(wc -c <"$GZ_TMP" | tr -d ' ')"
+        log_dim "  $(human_size "$BYTES") → $(human_size "$GZ_BYTES")"
+      else
+        rm -f "$GZ_TMP"
+      fi
+    fi
+    ;;
 esac
 
-log_step "Uploading $(human_size "$BYTES")…"
+UP_BYTES="$(wc -c <"$UPLOAD_FILE" | tr -d ' ')"
+if [ "$UP_BYTES" -gt 10485760 ]; then
+  [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
+  log_err "Upload payload is $(human_size "$UP_BYTES") — over the 10 MB limit."
+  exit 1
+fi
 
 UPLOAD_URL="${GRABLOG_API}/api/upload"
-CURL_ERR=0
+log_step "Checking API…"
 if command -v curl >/dev/null 2>&1; then
-  # Timeouts + disable Expect:100-continue (common hang with CDNs/proxies).
-  if ! curl -sS -f \
-    --connect-timeout 15 \
-    --max-time 120 \
+  if ! curl -fsS --connect-timeout 8 --max-time 15 \
+    -o /dev/null "${GRABLOG_API}/health"
+  then
+    [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
+    log_err "Cannot reach GrabLog API."
+    log_dim "  ${GRABLOG_API}/health"
+    exit 1
+  fi
+fi
+
+log_step "Uploading $(human_size "$UP_BYTES")…"
+
+CURL_ERR=0
+CURL_HAPPY=""
+if curl --help all 2>/dev/null | grep -q -- '--happy-eyeballs-timeout-ms'; then
+  CURL_HAPPY="--happy-eyeballs-timeout-ms 500"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  # Progress on stderr (not -s), timeouts, no Expect:100-continue, optional HE timeout.
+  # shellcheck disable=SC2086
+  set -- curl --progress-bar -f \
+    --connect-timeout 10 \
+    --max-time 180 \
+    --retry 2 \
+    --retry-delay 1 \
+    --retry-connrefused \
+    $CURL_HAPPY \
     -X POST \
     -H "Content-Type: $CONTENT_TYPE" \
     -H "X-GrabLog-Filename: $FNAME" \
     -H "Expect:" \
-    --data-binary @"$BEST" \
+    --data-binary @"$UPLOAD_FILE" \
     -o "$UPLOAD_RESP" \
     "$UPLOAD_URL"
-  then
+  if [ -n "$CONTENT_ENCODING" ]; then
+    set -- "$@" -H "Content-Encoding: $CONTENT_ENCODING"
+  fi
+  if ! "$@"; then
     CURL_ERR=$?
   fi
 elif command -v wget >/dev/null 2>&1; then
-  if ! wget -q -O "$UPLOAD_RESP" --timeout=120 \
+  set -- wget -O "$UPLOAD_RESP" --timeout=180 --tries=2 \
     --method=POST \
     --header="Content-Type: $CONTENT_TYPE" \
     --header="X-GrabLog-Filename: $FNAME" \
-    --body-file="$BEST" \
+    --body-file="$UPLOAD_FILE" \
     "$UPLOAD_URL"
-  then
+  if [ -n "$CONTENT_ENCODING" ]; then
+    set -- wget -O "$UPLOAD_RESP" --timeout=180 --tries=2 \
+      --method=POST \
+      --header="Content-Type: $CONTENT_TYPE" \
+      --header="Content-Encoding: $CONTENT_ENCODING" \
+      --header="X-GrabLog-Filename: $FNAME" \
+      --body-file="$UPLOAD_FILE" \
+      "$UPLOAD_URL"
+  fi
+  if ! "$@"; then
     CURL_ERR=$?
   fi
 else
+  [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
   log_err "Need curl or wget to upload."
   exit 1
 fi
+
+[ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
 
 RESP="$(cat "$UPLOAD_RESP" 2>/dev/null || true)"
 if [ "$CURL_ERR" -ne 0 ]; then

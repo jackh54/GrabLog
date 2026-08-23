@@ -91,6 +91,21 @@ describe("worker HTTP", () => {
     expect(script).toContain('GRABLOG_SERVER="example.net"');
   });
 
+  it("embeds the request origin as the API base (preview-safe)", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://preview.example.workers.dev/?yes=1", {
+        headers: { "user-agent": "curl/8.5.0", accept: "*/*" },
+      }),
+      env as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const script = await res.text();
+    expect(script).toContain('GRABLOG_API="https://preview.example.workers.dev"');
+    expect(script).not.toContain('GRABLOG_API="https://grablog.test"');
+  });
+
   it("serves PowerShell from /ps1", async () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
@@ -102,7 +117,7 @@ describe("worker HTTP", () => {
     const script = await res.text();
     expect(script).toContain("$GrabLogApi");
     expect(script).toContain("ATM");
-    expect(script).toContain("Invoke-RestMethod");
+    expect(script).toContain("HttpClient");
   });
 
   it("uploads and serves a log", async () => {
