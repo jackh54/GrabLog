@@ -72,8 +72,23 @@ describe("worker HTTP", () => {
     expect(script).toContain("GrabLog");
     expect(script).toContain('GRABLOG_LAUNCHER="prism"');
     expect(script).toContain('GRABLOG_YES="1"');
+    expect(script).toContain('GRABLOG_SERVER=""');
     expect(script).toContain("https://grablog.test");
     expect(script).toContain("set -eu");
+  });
+
+  it("embeds server filter in the client script", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://grablog.test/?server=example.net", {
+        headers: { "user-agent": "curl/8.5.0", accept: "*/*" },
+      }),
+      env as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const script = await res.text();
+    expect(script).toContain('GRABLOG_SERVER="example.net"');
   });
 
   it("serves PowerShell from /ps1", async () => {

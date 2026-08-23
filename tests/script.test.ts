@@ -8,10 +8,14 @@ import {
 } from "../src/script";
 
 describe("sanitizeParam", () => {
-  it("allows simple tokens", () => {
+  it("allows simple tokens and hostnames", () => {
     expect(sanitizeParam("modrinth")).toBe("modrinth");
     expect(sanitizeParam("All the Mods")).toBe("All the Mods");
     expect(sanitizeParam("crash-2024")).toBe("crash-2024");
+    expect(sanitizeParam("example.net")).toBe("example.net");
+    expect(sanitizeParam("play.example.net:25565")).toBe(
+      "play.example.net:25565",
+    );
   });
 
   it("strips unsafe characters", () => {
@@ -28,27 +32,29 @@ describe("escapeForScriptLiteral", () => {
 });
 
 describe("fillScriptTemplate", () => {
-  it("replaces placeholders", () => {
+  it("replaces placeholders including server", () => {
     const out = fillScriptTemplate(
-      'API="__GRABLOG_API__" L="__GRABLOG_LAUNCHER__"',
+      'API="__GRABLOG_API__" L="__GRABLOG_LAUNCHER__" S="__GRABLOG_SERVER__"',
       {
         api: "https://grablog.test",
         launcher: "prism",
         instance: "",
         name: "",
         type: "",
+        server: "example.net",
         yes: "",
       },
     );
     expect(out).toContain('API="https://grablog.test"');
     expect(out).toContain('L="prism"');
+    expect(out).toContain('S="example.net"');
   });
 });
 
 describe("paramsFromUrl", () => {
   it("reads filters from the query string", () => {
     const url = new URL(
-      "https://grablog.test/?launcher=modrinth&instance=ATM&name=crash&type=crash&yes=1",
+      "https://grablog.test/?launcher=modrinth&instance=ATM&name=crash&type=crash&server=example.net&yes=1",
     );
     const p = paramsFromUrl(url, "https://grablog.test/");
     expect(p).toEqual({
@@ -57,6 +63,7 @@ describe("paramsFromUrl", () => {
       instance: "ATM",
       name: "crash",
       type: "crash",
+      server: "example.net",
       yes: "1",
     });
   });

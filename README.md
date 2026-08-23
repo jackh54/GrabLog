@@ -22,7 +22,8 @@ The script searches common launcher paths, picks the newest preferred log (`late
 
 | Param | Example | Effect |
 | --- | --- | --- |
-| `launcher` | `?launcher=modrinth` | Limit to a launcher family (`vanilla`, `prism`, `modrinth`, `curseforge`, `multimc`, `lunar`, `atlauncher`, `gdlauncher`, …) |
+| `launcher` | `?launcher=modrinth` | Optional — limit to a launcher family. Omit to auto-pick across all. |
+| `server` | `?server=example.net` | Prefer the newest log that mentions that host/IP |
 | `instance` | `?instance=ATM` | Substring match on instance/profile path |
 | `name` | `?name=crash` | Filename substring |
 | `type` | `?type=crash` or `?type=log` | Prefer crash reports or normal logs |
@@ -31,7 +32,7 @@ The script searches common launcher paths, picks the newest preferred log (`late
 Example:
 
 ```bash
-curl -fsSL 'https://grablog.pandascript.dev?launcher=prism&instance=All+the+Mods' | sh
+curl -fsSL 'https://grablog.pandascript.dev?server=example.net' | sh
 ```
 
 Share links look like `https://grablog.pandascript.dev/l/<unguessable-id>` and expire after 24 hours.

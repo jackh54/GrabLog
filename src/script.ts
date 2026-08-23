@@ -16,7 +16,8 @@ export function escapeForScriptLiteral(value: string): string {
 export function sanitizeParam(raw: string | null, max = 64): string {
   if (!raw) return "";
   const trimmed = raw.trim().slice(0, max);
-  if (!/^[A-Za-z0-9._\-+=@ ]*$/.test(trimmed)) {
+  // Hostnames, IPs, ports, and simple launcher/instance tokens.
+  if (!/^[A-Za-z0-9._\-+=@: ]*$/.test(trimmed)) {
     return "";
   }
   return trimmed;
@@ -28,6 +29,7 @@ export interface ScriptParams {
   instance: string;
   name: string;
   type: string;
+  server: string;
   yes: string;
 }
 
@@ -41,6 +43,7 @@ export function fillScriptTemplate(
     .replaceAll("__GRABLOG_INSTANCE__", escapeForScriptLiteral(params.instance))
     .replaceAll("__GRABLOG_NAME__", escapeForScriptLiteral(params.name))
     .replaceAll("__GRABLOG_TYPE__", escapeForScriptLiteral(params.type))
+    .replaceAll("__GRABLOG_SERVER__", escapeForScriptLiteral(params.server))
     .replaceAll("__GRABLOG_YES__", escapeForScriptLiteral(params.yes));
 }
 
@@ -64,6 +67,12 @@ export function paramsFromUrl(
       url.searchParams.get("name") ?? url.searchParams.get("file"),
     ),
     type: sanitizeParam(url.searchParams.get("type")).toLowerCase(),
+    server: sanitizeParam(
+      url.searchParams.get("server") ??
+        url.searchParams.get("host") ??
+        url.searchParams.get("ip"),
+      128,
+    ),
     yes: yesRaw === "1" || yesRaw === "true" || yesRaw === "yes" ? "1" : "",
   };
 }
