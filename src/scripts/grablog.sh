@@ -49,6 +49,7 @@ print_banner() {
   log ""
   log "${C_BOLD}${C_GREEN}  GrabLog${C_RESET}  ${C_DIM}minecraft log share${C_RESET}"
   log "${C_DIM}  ────────────────────────────${C_RESET}"
+  log_dim "  $GRABLOG_API"
   log ""
 }
 
@@ -361,16 +362,17 @@ esac
 log ""
 
 if [ "$GRABLOG_YES" != "1" ] && [ "$GRABLOG_YES" != "true" ]; then
-  if [ ! -t 0 ]; then
-    if [ -r /dev/tty ]; then
-      exec </dev/tty
-    else
-      log_err "No TTY for confirmation. Re-run with ?yes=1 to skip."
-      exit 2
-    fi
-  fi
   printf '%s›%s Upload for 24 hours? [y/N] ' "$C_CYAN" "$C_RESET" >&2
-  read -r _ans || _ans=""
+  # Read the answer from the terminal device only — do not permanently redirect
+  # shell stdin (that breaks `curl | sh` after confirmation).
+  if [ -t 0 ]; then
+    read -r _ans || _ans=""
+  elif [ -r /dev/tty ]; then
+    read -r _ans </dev/tty || _ans=""
+  else
+    log_err "No TTY for confirmation. Re-run with ?yes=1 to skip."
+    exit 2
+  fi
   case "$_ans" in
     y|Y|yes|YES) ;;
     *)
@@ -427,34 +429,14 @@ if [ "$UP_BYTES" -gt 10485760 ]; then
 fi
 
 UPLOAD_URL="${GRABLOG_API}/api/upload"
-log_step "Uploading…"
-
-do_health() {
-  if command -v curl >/dev/null 2>&1; then
-    command curl -fsS --http1.1 --connect-timeout 5 --max-time 10 \
-      -o /dev/null "${GRABLOG_API}/health"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q -O /dev/null --timeout=10 "${GRABLOG_API}/health"
-  else
-    return 1
-  fi
-}
-
-if ! do_health; then
-  [ -n "$CLEANUP_UPLOAD" ] && rm -f "$CLEANUP_UPLOAD"
-  log_err "Cannot reach GrabLog API."
-  log_dim "  ${GRABLOG_API}/health"
-  exit 1
-fi
-
-log_dim "  $(human_size "$UP_BYTES")"
+log_step "Uploading $(human_size "$UP_BYTES")…"
+log_dim "  $GRABLOG_API"
 : >"$UPLOAD_RESP"
 CURL_ERR=1
 
-# Minimal curl flags — avoid retries/progress/help-detection (those hang on some systems).
 do_curl_upload() {
   if [ -n "$CONTENT_ENCODING" ]; then
-    command curl -sS -f --http1.1 \
+    command curl -sS -f \
       --connect-timeout 8 \
       --max-time 45 \
       -X POST \
@@ -466,7 +448,7 @@ do_curl_upload() {
       -o "$UPLOAD_RESP" \
       "$UPLOAD_URL"
   else
-    command curl -sS -f --http1.1 \
+    command curl -sS -f \
       --connect-timeout 8 \
       --max-time 45 \
       -X POST \
