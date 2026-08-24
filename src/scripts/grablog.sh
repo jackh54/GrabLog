@@ -362,16 +362,17 @@ esac
 log ""
 
 if [ "$GRABLOG_YES" != "1" ] && [ "$GRABLOG_YES" != "true" ]; then
-  if [ ! -t 0 ]; then
-    if [ -r /dev/tty ]; then
-      exec </dev/tty
-    else
-      log_err "No TTY for confirmation. Re-run with ?yes=1 to skip."
-      exit 2
-    fi
-  fi
   printf '%s›%s Upload for 24 hours? [y/N] ' "$C_CYAN" "$C_RESET" >&2
-  read -r _ans || _ans=""
+  # Read the answer from the terminal device only — do not permanently redirect
+  # shell stdin (that breaks `curl | sh` after confirmation).
+  if [ -t 0 ]; then
+    read -r _ans || _ans=""
+  elif [ -r /dev/tty ]; then
+    read -r _ans </dev/tty || _ans=""
+  else
+    log_err "No TTY for confirmation. Re-run with ?yes=1 to skip."
+    exit 2
+  fi
   case "$_ans" in
     y|Y|yes|YES) ;;
     *)

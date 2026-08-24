@@ -127,4 +127,11 @@ fill "" "" "" "" "other.net"
 COMBINED="$(bash "$SCRIPT" 2>&1)"
 printf '%s\n' "$COMBINED" | grep -q '.minecraft/logs/latest.log'
 
+echo "== no permanent stdin redirect (curl|sh safe confirm) =="
+if grep -n 'exec *</dev/tty' "$ROOT/src/scripts/grablog.sh"; then
+  echo "FAIL: grablog.sh must not exec </dev/tty"
+  exit 1
+fi
+grep -q 'read -r _ans </dev/tty' "$ROOT/src/scripts/grablog.sh"
+
 echo "discovery_smoke: ok"
