@@ -7,7 +7,16 @@ $GrabLogLauncher = '__GRABLOG_LAUNCHER__'
 $GrabLogInstance = '__GRABLOG_INSTANCE__'
 $GrabLogName = '__GRABLOG_NAME__'
 $GrabLogType = '__GRABLOG_TYPE__'
+$GrabLogServer = '__GRABLOG_SERVER__'
 $GrabLogYes = '__GRABLOG_YES__'
+
+function Write-Banner {
+  Write-Host ''
+  Write-Host '  GrabLog  ' -NoNewline -ForegroundColor Green
+  Write-Host 'minecraft log share' -ForegroundColor DarkGray
+  Write-Host '  ────────────────────────────' -ForegroundColor DarkGray
+  Write-Host ''
+}
 
 function Test-LauncherMatch {
   param([string]$Path, [string]$Want)
@@ -55,8 +64,47 @@ function Test-TypeMatch {
   }
 }
 
+function Test-ServerMatch {
+  param([string]$Path, [string]$Want)
+  if ([string]::IsNullOrWhiteSpace($Want)) { return $true }
+  try {
+    if ($Path.EndsWith('.gz', [StringComparison]::OrdinalIgnoreCase)) {
+      $fs = [IO.File]::OpenRead($Path)
+      try {
+        $gz = New-Object IO.Compression.GzipStream($fs, [IO.Compression.CompressionMode]::Decompress)
+        $reader = New-Object IO.StreamReader($gz)
+        $chunkSize = 512 * 1024
+        $buf = New-Object char[] $chunkSize
+        while (($n = $reader.Read($buf, 0, $chunkSize)) -gt 0) {
+          $text = New-Object string ($buf, 0, $n)
+          if ($text.IndexOf($Want, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+          }
+        }
+      } finally {
+        $fs.Dispose()
+      }
+      return $false
+    }
+    # Stream scan plain logs so huge files stay fast.
+    $reader = [IO.File]::OpenText($Path)
+    try {
+      while ($null -ne ($line = $reader.ReadLine())) {
+        if ($line.IndexOf($Want, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+          return $true
+        }
+      }
+    } finally {
+      $reader.Dispose()
+    }
+    return $false
+  } catch {
+    return $false
+  }
+}
+
 function Get-Score {
-  param([IO.FileInfo]$File)
+  param([IO.FileInfo]$File, [string]$Server)
   $base = $File.Name.ToLowerInvariant()
   $score = [int64]500000000000
   if ($base -eq 'latest.log') { $score = [int64]1000000000000 }
@@ -64,7 +112,14 @@ function Get-Score {
   elseif ($base -like 'crash-*.txt') { $score = [int64]800000000000 }
   elseif ($base -like '*.log') { $score = [int64]700000000000 }
   elseif ($base -like '*.log.gz') { $score = [int64]600000000000 }
-  return $score + [int64]([DateTimeOffset]$File.LastWriteTimeUtc).ToUnixTimeSeconds()
+  $score += [int64]([DateTimeOffset]$File.LastWriteTimeUtc).ToUnixTimeSeconds()
+  if (-not [string]::IsNullOrWhiteSpace($Server) -and $File.Extension -ne '.gz') {
+    $tail = Get-Content -LiteralPath $File.FullName -Tail 200 -ErrorAction SilentlyContinue
+    if ($tail -and (($tail -join "`n").IndexOf($Server, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+      $score += [int64]50000000000
+    }
+  }
+  return $score
 }
 
 function Add-IfLog {
@@ -82,37 +137,6 @@ function Add-IfLog {
     [void]$List.Add($item.FullName)
   }
 }
-
-Write-Host ''
-Write-Host '  GrabLog — Minecraft log finder'
-Write-Host ''
-
-$roots = New-Object System.Collections.Generic.List[string]
-$envAppData = $env:APPDATA
-$userProfile = $env:USERPROFILE
-
-$candidateRoots = @(
-  (Join-Path $envAppData '.minecraft'),
-  (Join-Path $envAppData 'PrismLauncher'),
-  (Join-Path $envAppData 'PolyMC'),
-  (Join-Path $envAppData 'MultiMC'),
-  (Join-Path $envAppData 'com.modrinth.Theseus'),
-  (Join-Path $envAppData 'modrinth-app'),
-  (Join-Path $envAppData 'ATLauncher'),
-  (Join-Path $envAppData 'gdlauncher_next'),
-  (Join-Path $envAppData 'gdlauncher'),
-  (Join-Path $userProfile 'curseforge\minecraft'),
-  (Join-Path $userProfile '.lunarclient'),
-  (Join-Path $userProfile 'AppData\Roaming\.minecraft')
-)
-
-foreach ($r in $candidateRoots) {
-  if (Test-Path -LiteralPath $r -PathType Container) {
-    [void]$roots.Add($r)
-  }
-}
-
-$files = New-Object System.Collections.Generic.List[string]
 
 function Scan-Tree {
   param(
@@ -148,6 +172,48 @@ function Scan-Tree {
   }
 }
 
+Write-Banner
+
+$filterBits = @()
+if ($GrabLogLauncher) { $filterBits += "launcher=$GrabLogLauncher" }
+if ($GrabLogInstance) { $filterBits += "instance=$GrabLogInstance" }
+if ($GrabLogName) { $filterBits += "name=$GrabLogName" }
+if ($GrabLogType) { $filterBits += "type=$GrabLogType" }
+if ($GrabLogServer) { $filterBits += "server=$GrabLogServer" }
+if ($filterBits.Count -gt 0) {
+  Write-Host ("  filters: {0}" -f ($filterBits -join ' ')) -ForegroundColor DarkGray
+} else {
+  Write-Host '  auto: newest log across all launchers' -ForegroundColor DarkGray
+}
+
+Write-Host '  › Scanning launcher folders…' -ForegroundColor Cyan
+
+$roots = New-Object System.Collections.Generic.List[string]
+$envAppData = $env:APPDATA
+$userProfile = $env:USERPROFILE
+
+$candidateRoots = @(
+  (Join-Path $envAppData '.minecraft'),
+  (Join-Path $envAppData 'PrismLauncher'),
+  (Join-Path $envAppData 'PolyMC'),
+  (Join-Path $envAppData 'MultiMC'),
+  (Join-Path $envAppData 'com.modrinth.Theseus'),
+  (Join-Path $envAppData 'modrinth-app'),
+  (Join-Path $envAppData 'ATLauncher'),
+  (Join-Path $envAppData 'gdlauncher_next'),
+  (Join-Path $envAppData 'gdlauncher'),
+  (Join-Path $userProfile 'curseforge\minecraft'),
+  (Join-Path $userProfile '.lunarclient'),
+  (Join-Path $userProfile 'AppData\Roaming\.minecraft')
+)
+
+foreach ($r in $candidateRoots) {
+  if (Test-Path -LiteralPath $r -PathType Container) {
+    [void]$roots.Add($r)
+  }
+}
+
+$files = New-Object System.Collections.Generic.List[string]
 foreach ($root in $roots) {
   Add-IfLog -List $files -Path (Join-Path $root 'logs\latest.log')
   Add-IfLog -List $files -Path (Join-Path $root 'minecraft\logs\latest.log')
@@ -163,9 +229,10 @@ foreach ($path in $files) {
   if (-not (Test-InstanceMatch -Path $path -Want $GrabLogInstance)) { continue }
   if (-not (Test-NameMatch -Path $path -Want $GrabLogName)) { continue }
   if (-not (Test-TypeMatch -Path $path -Want $GrabLogType)) { continue }
+  if (-not (Test-ServerMatch -Path $path -Want $GrabLogServer)) { continue }
   $matched++
   $info = Get-Item -LiteralPath $path
-  $score = Get-Score -File $info
+  $score = Get-Score -File $info -Server $GrabLogServer
   if ($score -gt $bestScore) {
     $bestScore = $score
     $best = $info
@@ -174,58 +241,135 @@ foreach ($path in $files) {
 
 if ($null -eq $best) {
   $msg = 'No Minecraft log found'
-  if ($GrabLogLauncher) { $msg += " (launcher=$GrabLogLauncher)" }
-  if ($GrabLogInstance) { $msg += " (instance=$GrabLogInstance)" }
-  if ($GrabLogName) { $msg += " (name=$GrabLogName)" }
-  Write-Error "$msg. Tried common vanilla / Prism / Modrinth / CurseForge / MultiMC / Lunar paths."
+  if ($filterBits.Count -gt 0) { $msg += " ($($filterBits -join ', '))" }
+  Write-Host "  ✗ $msg" -ForegroundColor Red
+  Write-Host '    Tried vanilla / Prism / Modrinth / CurseForge / MultiMC / Lunar paths.' -ForegroundColor DarkGray
   exit 1
 }
 
-Write-Host ("Found:   {0}" -f $best.FullName)
-Write-Host ("Size:    {0:N0} bytes" -f $best.Length)
-Write-Host ("Modified:{0:yyyy-MM-dd HH:mm:ss}" -f $best.LastWriteTime)
-Write-Host ("Matched  {0} candidate(s); selecting most recent preferred log." -f $matched)
+Write-Host '  ✓ Found ' -NoNewline -ForegroundColor Green
+Write-Host $best.Name -NoNewline -ForegroundColor White
+Write-Host ("  ({0:N0} bytes · {1:yyyy-MM-dd HH:mm})" -f $best.Length, $best.LastWriteTime) -ForegroundColor DarkGray
+Write-Host ("    {0}" -f $best.FullName) -ForegroundColor DarkGray
+Write-Host ("    {0} candidate(s) matched" -f $matched) -ForegroundColor DarkGray
 Write-Host ''
 
 if ($best.Extension -ne '.gz') {
-  Write-Host '--- last 8 lines ---'
-  Get-Content -LiteralPath $best.FullName -Tail 8 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-  Write-Host '--------------------'
-  Write-Host ''
+  Write-Host '    last lines' -ForegroundColor DarkGray
+  Get-Content -LiteralPath $best.FullName -Tail 6 -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host '    │ ' -NoNewline -ForegroundColor DarkGray
+    Write-Host $_
+  }
 } else {
-  Write-Host '(compressed log — preview skipped)'
-  Write-Host ''
+  Write-Host '    (compressed — preview skipped)' -ForegroundColor DarkGray
 }
+Write-Host ''
 
 $yes = $GrabLogYes -eq '1' -or $GrabLogYes -eq 'true'
 if (-not $yes) {
-  $ans = Read-Host 'Upload this log to GrabLog for 24 hours? [y/N]'
+  $ans = Read-Host '  › Upload for 24 hours? [y/N]'
   if ($ans -notmatch '^(y|yes)$') {
-    Write-Host 'Cancelled.'
+    Write-Host '  ! Cancelled.' -ForegroundColor Yellow
     exit 0
   }
 }
 
-Write-Host 'Uploading...'
-$bytes = [IO.File]::ReadAllBytes($best.FullName)
-$contentType = if ($best.Extension -eq '.gz') { 'application/gzip' } else { 'text/plain' }
+Write-Host '  › Preparing upload…' -ForegroundColor Cyan
 
-try {
-  $resp = Invoke-RestMethod -Method Post -Uri ($GrabLogApi.TrimEnd('/') + '/api/upload') `
-    -Headers @{ 'X-GrabLog-Filename' = $best.Name } `
-    -ContentType $contentType `
-    -Body $bytes
-} catch {
-  Write-Error ("Upload failed: {0}" -f $_.Exception.Message)
+if ($best.Length -gt 104857600) {
+  Write-Host ("  ✗ Log is {0:N0} bytes — too large (limit 100 MB)." -f $best.Length) -ForegroundColor Red
   exit 1
 }
 
+$uploadPath = $best.FullName
+$uploadName = $best.Name
+$contentType = 'text/plain; charset=utf-8'
+$contentEncoding = $null
+$tempGz = $null
+
+try {
+  if ($best.Extension -eq '.gz') {
+    $contentType = 'application/gzip'
+    $contentEncoding = 'gzip'
+  } else {
+    $tempGz = [IO.Path]::GetTempFileName() + '.gz'
+    $inStream = [IO.File]::OpenRead($best.FullName)
+    $outStream = [IO.File]::Create($tempGz)
+    try {
+      $gzip = New-Object IO.Compression.GzipStream($outStream, [IO.Compression.CompressionMode]::Compress)
+      $inStream.CopyTo($gzip)
+      $gzip.Dispose()
+    } finally {
+      $outStream.Dispose()
+      $inStream.Dispose()
+    }
+    $uploadPath = $tempGz
+    $uploadName = $best.Name + '.gz'
+    $contentType = 'application/gzip'
+    $contentEncoding = 'gzip'
+    $gzLen = (Get-Item -LiteralPath $tempGz).Length
+    Write-Host ("    {0:N0} → {1:N0} bytes (gzip)" -f $best.Length, $gzLen) -ForegroundColor DarkGray
+  }
+
+  $payloadLen = (Get-Item -LiteralPath $uploadPath).Length
+  if ($payloadLen -gt 10485760) {
+    Write-Host ("  ✗ Upload payload is {0:N0} bytes — over the 10 MB limit." -f $payloadLen) -ForegroundColor Red
+    exit 1
+  }
+
+  $uploadUri = ($GrabLogApi.TrimEnd('/') + '/api/upload')
+  $healthUri = ($GrabLogApi.TrimEnd('/') + '/health')
+
+  $handler = New-Object System.Net.Http.HttpClientHandler
+  $client = New-Object System.Net.Http.HttpClient($handler)
+  $client.Timeout = [TimeSpan]::FromSeconds(45)
+
+  Write-Host ("  › Uploading {0:N0} bytes…" -f $payloadLen) -ForegroundColor Cyan
+  try {
+    $health = $client.GetAsync($healthUri).GetAwaiter().GetResult()
+    if (-not $health.IsSuccessStatusCode) {
+      throw "health check failed ($([int]$health.StatusCode))"
+    }
+  } catch {
+    Write-Host ("  ✗ Cannot reach GrabLog API: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    Write-Host ("    {0}" -f $healthUri) -ForegroundColor DarkGray
+    exit 1
+  }
+  $bytes = [IO.File]::ReadAllBytes($uploadPath)
+  $content = New-Object System.Net.Http.ByteArrayContent($bytes)
+  $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
+  if ($contentEncoding) {
+    $content.Headers.Add('X-GrabLog-Encoding', $contentEncoding)
+  }
+  $content.Headers.Add('X-GrabLog-Filename', $uploadName)
+  $response = $client.PostAsync($uploadUri, $content).GetAwaiter().GetResult()
+  $raw = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+  if (-not $response.IsSuccessStatusCode) {
+    Write-Host ("  ✗ Upload failed ({0})." -f [int]$response.StatusCode) -ForegroundColor Red
+    if ($raw) { Write-Host ("    {0}" -f $raw) -ForegroundColor DarkGray }
+    exit 1
+  }
+  $resp = $raw | ConvertFrom-Json
+} catch {
+  Write-Host ("  ✗ Upload failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
+  Write-Host ("    endpoint: {0}" -f ($GrabLogApi.TrimEnd('/') + '/api/upload')) -ForegroundColor DarkGray
+  exit 1
+} finally {
+  if ($content) { $content.Dispose() }
+  if ($client) { $client.Dispose() }
+  if ($tempGz -and (Test-Path -LiteralPath $tempGz)) {
+    Remove-Item -LiteralPath $tempGz -Force -ErrorAction SilentlyContinue
+  }
+}
+
 if (-not $resp.url) {
-  Write-Error ("Upload failed: {0}" -f ($resp | ConvertTo-Json -Compress))
+  Write-Host '  ✗ Upload failed: unexpected response.' -ForegroundColor Red
   exit 1
 }
 
 Write-Host ''
-Write-Host 'Share link (expires in 24h):'
-Write-Host $resp.url
+Write-Host '  ✓ Share link ' -NoNewline -ForegroundColor Green
+Write-Host '(expires in 24h)' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host ("  {0}" -f $resp.url) -ForegroundColor White
 Write-Host ''

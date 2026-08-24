@@ -90,7 +90,8 @@ export function landingHtml(baseUrl: string): string {
 
     <h2>Optional filters</h2>
     <ul>
-      <li><code>?launcher=modrinth</code> — prism, multimc, curseforge, lunar, vanilla, …</li>
+      <li><code>?launcher=modrinth</code> — optional; omit to auto-pick any launcher</li>
+      <li><code>?server=example.net</code> — log whose contents mention that host/IP</li>
       <li><code>?instance=MyPack</code> — substring match on instance/profile path</li>
       <li><code>?name=crash</code> — filename substring</li>
       <li><code>?type=crash</code> or <code>?type=log</code></li>
@@ -98,7 +99,7 @@ export function landingHtml(baseUrl: string): string {
     </ul>
 
     <h2>Example</h2>
-    <pre><code>curl -fsSL '${base}?launcher=prism&amp;instance=All+the+Mods' | sh</code></pre>
+    <pre><code>curl -fsSL '${base}?server=example.net' | sh</code></pre>
 
     <footer>
       Logs expire after 24 hours. Upload requires your confirmation.

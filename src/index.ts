@@ -4,6 +4,7 @@ import { landingHtml } from "./landing";
 import {
   fillScriptTemplate,
   paramsFromUrl,
+  resolvePublicBase,
   wantsPowerShell,
 } from "./script";
 import { handleServe } from "./serve";
@@ -41,7 +42,7 @@ function corsPreflight(): Response {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET, POST, OPTIONS",
       "access-control-allow-headers":
-        "content-type, x-grablog-filename, accept",
+        "content-type, content-encoding, x-grablog-filename, x-grablog-encoding, accept",
       "access-control-max-age": "86400",
     },
   });
@@ -57,7 +58,8 @@ async function serveClientScript(
   env: Env,
   url: URL,
 ): Promise<Response> {
-  const params = paramsFromUrl(url, env.PUBLIC_BASE_URL);
+  const apiBase = resolvePublicBase(request, env.PUBLIC_BASE_URL);
+  const params = paramsFromUrl(url, apiBase);
   const ps = wantsPowerShell(request, url);
   const filled = fillScriptTemplate(ps ? ps1Template : shTemplate, params);
   return text(filled, 200, {
@@ -78,6 +80,7 @@ export default {
     _ctx: ExecutionContext,
   ): Promise<Response> {
     const url = new URL(request.url);
+    const publicBase = resolvePublicBase(request, env.PUBLIC_BASE_URL);
 
     if (request.method === "OPTIONS") {
       return corsPreflight();
@@ -88,16 +91,22 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/api/upload") {
-      const result = await handleUpload(request, env);
-      if (!result.ok) {
-        return json({ error: result.error }, result.status);
+      try {
+        const result = await handleUpload(request, env, publicBase);
+        if (!result.ok) {
+          return json({ error: result.error }, result.status);
+        }
+        return json({
+          id: result.id,
+          url: result.url,
+          expiresAt: result.expiresAt,
+          bytes: result.bytes,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "upload failed";
+        console.error("upload error", message);
+        return json({ error: message }, 500);
       }
-      return json({
-        id: result.id,
-        url: result.url,
-        expiresAt: result.expiresAt,
-        bytes: result.bytes,
-      });
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/l/")) {
@@ -132,9 +141,8 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/") {
-      // Browsers get the landing page; curl/wget get the runnable script.
       if (prefersHtml(request)) {
-        return new Response(landingHtml(env.PUBLIC_BASE_URL), {
+        return new Response(landingHtml(publicBase), {
           status: 200,
           headers: {
             "content-type": "text/html; charset=utf-8",

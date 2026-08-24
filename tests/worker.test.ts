@@ -72,8 +72,38 @@ describe("worker HTTP", () => {
     expect(script).toContain("GrabLog");
     expect(script).toContain('GRABLOG_LAUNCHER="prism"');
     expect(script).toContain('GRABLOG_YES="1"');
+    expect(script).toContain('GRABLOG_SERVER=""');
     expect(script).toContain("https://grablog.test");
     expect(script).toContain("set -eu");
+  });
+
+  it("embeds server filter in the client script", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://grablog.test/?server=example.net", {
+        headers: { "user-agent": "curl/8.5.0", accept: "*/*" },
+      }),
+      env as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const script = await res.text();
+    expect(script).toContain('GRABLOG_SERVER="example.net"');
+  });
+
+  it("embeds the request origin as the API base (preview-safe)", async () => {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://preview.example.workers.dev/?yes=1", {
+        headers: { "user-agent": "curl/8.5.0", accept: "*/*" },
+      }),
+      env as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const script = await res.text();
+    expect(script).toContain('GRABLOG_API="https://preview.example.workers.dev"');
+    expect(script).not.toContain('GRABLOG_API="https://grablog.test"');
   });
 
   it("serves PowerShell from /ps1", async () => {
@@ -87,7 +117,7 @@ describe("worker HTTP", () => {
     const script = await res.text();
     expect(script).toContain("$GrabLogApi");
     expect(script).toContain("ATM");
-    expect(script).toContain("Invoke-RestMethod");
+    expect(script).toContain("HttpClient");
   });
 
   it("uploads and serves a log", async () => {
@@ -126,6 +156,43 @@ describe("worker HTTP", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(res.status).toBe(404);
+  });
+
+  it("accepts gzip uploads via X-GrabLog-Encoding", async () => {
+    const plain = "gzipped minecraft log line\n";
+    // Minimal gzip via CompressionStream
+    const stream = new Blob([plain])
+      .stream()
+      .pipeThrough(new CompressionStream("gzip"));
+    const gz = await new Response(stream).arrayBuffer();
+
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request("https://grablog.test/api/upload", {
+        method: "POST",
+        headers: {
+          "content-type": "application/gzip",
+          "x-grablog-encoding": "gzip",
+          "x-grablog-filename": "latest.log.gz",
+        },
+        body: gz,
+      }),
+      env as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; bytes: number };
+    expect(body.bytes).toBe(plain.length);
+
+    const getCtx = createExecutionContext();
+    const getRes = await worker.fetch(
+      new Request(body.url),
+      env as Env,
+      getCtx,
+    );
+    await waitOnExecutionContext(getCtx);
+    expect(await getRes.text()).toBe(plain);
   });
 
   it("accepts multipart uploads", async () => {
