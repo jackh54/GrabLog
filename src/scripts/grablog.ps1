@@ -318,7 +318,6 @@ try {
   }
 
   $uploadUri = ($GrabLogApi.TrimEnd('/') + '/api/upload')
-  $healthUri = ($GrabLogApi.TrimEnd('/') + '/health')
 
   $handler = New-Object System.Net.Http.HttpClientHandler
   $client = New-Object System.Net.Http.HttpClient($handler)
