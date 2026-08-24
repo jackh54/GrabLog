@@ -427,8 +427,7 @@ if [ "$UP_BYTES" -gt 10485760 ]; then
 fi
 
 UPLOAD_URL="${GRABLOG_API}/api/upload"
-log_step "Checking API…"
-log_dim "  $UPLOAD_URL"
+log_step "Uploading…"
 
 do_health() {
   if command -v curl >/dev/null 2>&1; then
@@ -447,9 +446,8 @@ if ! do_health; then
   log_dim "  ${GRABLOG_API}/health"
   exit 1
 fi
-log_ok "API reachable"
 
-log_step "Uploading $(human_size "$UP_BYTES")…"
+log_dim "  $(human_size "$UP_BYTES")"
 : >"$UPLOAD_RESP"
 CURL_ERR=1
 
@@ -466,8 +464,7 @@ do_curl_upload() {
       -H "Expect:" \
       --data-binary @"$UPLOAD_FILE" \
       -o "$UPLOAD_RESP" \
-      -w "http=%{http_code} time=%{time_total}\n" \
-      "$UPLOAD_URL" >&2
+      "$UPLOAD_URL"
   else
     command curl -sS -f --http1.1 \
       --connect-timeout 8 \
@@ -478,8 +475,7 @@ do_curl_upload() {
       -H "Expect:" \
       --data-binary @"$UPLOAD_FILE" \
       -o "$UPLOAD_RESP" \
-      -w "http=%{http_code} time=%{time_total}\n" \
-      "$UPLOAD_URL" >&2
+      "$UPLOAD_URL"
   fi
 }
 
@@ -496,12 +492,9 @@ if enc:
 try:
     with urllib.request.urlopen(req, timeout=45) as resp:
         body = resp.read()
-        status = resp.status
     open(out, "wb").write(body)
-    print(f"http={status} via=python", file=sys.stderr)
 except urllib.error.HTTPError as e:
     open(out, "wb").write(e.read() or b"")
-    print(f"http={e.code} via=python", file=sys.stderr)
     raise SystemExit(1)
 PY
 }
@@ -511,7 +504,7 @@ if command -v curl >/dev/null 2>&1; then
     CURL_ERR=0
   else
     CURL_ERR=$?
-    log_warn "curl upload failed (exit $CURL_ERR) — trying python fallback…"
+    log_warn "curl upload failed — trying python fallback…"
   fi
 fi
 
@@ -557,7 +550,6 @@ if [ "$CURL_ERR" -ne 0 ]; then
   log_err "Upload failed (exit $CURL_ERR)."
   [ -n "$RESP" ] && log_dim "  $RESP"
   log_dim "  endpoint: $UPLOAD_URL"
-  log_dim "  tip: re-run with ?yes=1 and check that GRABLOG_API matches your preview host"
   exit 1
 fi
 
