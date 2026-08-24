@@ -324,7 +324,7 @@ try {
   $client = New-Object System.Net.Http.HttpClient($handler)
   $client.Timeout = [TimeSpan]::FromSeconds(45)
 
-  Write-Host '  › Checking API…' -ForegroundColor Cyan
+  Write-Host ("  › Uploading {0:N0} bytes…" -f $payloadLen) -ForegroundColor Cyan
   try {
     $health = $client.GetAsync($healthUri).GetAwaiter().GetResult()
     if (-not $health.IsSuccessStatusCode) {
@@ -335,8 +335,6 @@ try {
     Write-Host ("    {0}" -f $healthUri) -ForegroundColor DarkGray
     exit 1
   }
-
-  Write-Host ("  › Uploading {0:N0} bytes…" -f $payloadLen) -ForegroundColor Cyan
   $bytes = [IO.File]::ReadAllBytes($uploadPath)
   $content = New-Object System.Net.Http.ByteArrayContent($bytes)
   $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
