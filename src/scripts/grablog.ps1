@@ -325,16 +325,7 @@ try {
   $client.Timeout = [TimeSpan]::FromSeconds(45)
 
   Write-Host ("  › Uploading {0:N0} bytes…" -f $payloadLen) -ForegroundColor Cyan
-  try {
-    $health = $client.GetAsync($healthUri).GetAwaiter().GetResult()
-    if (-not $health.IsSuccessStatusCode) {
-      throw "health check failed ($([int]$health.StatusCode))"
-    }
-  } catch {
-    Write-Host ("  ✗ Cannot reach GrabLog API: {0}" -f $_.Exception.Message) -ForegroundColor Red
-    Write-Host ("    {0}" -f $healthUri) -ForegroundColor DarkGray
-    exit 1
-  }
+  Write-Host ("    {0}" -f $GrabLogApi) -ForegroundColor DarkGray
   $bytes = [IO.File]::ReadAllBytes($uploadPath)
   $content = New-Object System.Net.Http.ByteArrayContent($bytes)
   $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse($contentType)
